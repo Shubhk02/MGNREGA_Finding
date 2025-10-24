@@ -106,26 +106,8 @@ async def cache_set(key: str, value: Any, ttl: int = 3600):
 
 async def fetch_from_data_gov(district_code: str, month: int, year: int) -> Dict[str, Any]:
     """Fetch performance data from data.gov.in API"""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Mock data for demonstration as the actual API endpoint might vary
-            # In production, replace with actual data.gov.in MGNREGA API endpoint
-            response = await client.get(
-                "https://api.data.gov.in/resource/example",
-                params={
-                    "api-key": DATA_GOV_API_KEY,
-                    "format": "json",
-                    "district_code": district_code,
-                    "month": month,
-                    "year": year
-                }
-            )
-            if response.status_code == 200:
-                return response.json()
-    except Exception as e:
-        logging.error(f"API fetch error: {e}")
-    
-    # Return mock data if API fails
+    # For MVP, using mock data as the actual data.gov.in MGNREGA API endpoint structure may vary
+    # In production, replace with actual data.gov.in MGNREGA API endpoint once confirmed
     return generate_mock_performance_data(district_code, month, year)
 
 def generate_mock_performance_data(district_code: str, month: int, year: int) -> Dict[str, Any]:
