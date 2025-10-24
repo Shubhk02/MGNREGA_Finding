@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import redis.asyncio as redis
 import json
+from states_data import get_all_states, get_districts_for_state, INDIAN_STATES
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
