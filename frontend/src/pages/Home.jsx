@@ -9,8 +9,9 @@ import Skeleton from 'react-loading-skeleton';
 import 'react-loading-skeleton/dist/skeleton.css';
 import { toast } from 'sonner';
 
+// API base: if env provided use absolute backend URL, else rely on dev proxy '/api'
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 const Home = () => {
   const navigate = useNavigate();
@@ -37,14 +38,20 @@ const Home = () => {
   }, [searchTerm, districts]);
 
   const fetchDistricts = async () => {
+    console.log('Fetching districts from:', `${API}/districts?state_code=UP`);
+    console.log('BACKEND_URL:', BACKEND_URL);
+    console.log('API:', API);
     try {
       const response = await axios.get(`${API}/districts?state_code=UP`);
+      console.log('Districts response:', response.data);
       if (response.data.success) {
         setDistricts(response.data.data);
         setFilteredDistricts(response.data.data);
+        console.log('Districts loaded:', response.data.data.length);
       }
     } catch (error) {
       console.error('Error fetching districts:', error);
+      console.error('Error details:', error.response?.data || error.message);
       toast.error('Failed to load districts');
     } finally {
       setLoading(false);

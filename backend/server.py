@@ -137,7 +137,7 @@ async def root():
 
 @api_router.get("/districts", response_model=DistrictResponse)
 async def get_districts(state_code: str = Query("UP")):
-    """Get all districts for a state"""
+    """Get all districts for a state (deduped by district_code)."""
     try:
         cache_key = f"districts:{state_code}"
         cached_data = await cache_get(cache_key)
@@ -145,14 +145,58 @@ async def get_districts(state_code: str = Query("UP")):
         if cached_data:
             return DistrictResponse(success=True, data=cached_data)
         
-        districts = await db.districts.find(
+        # Fetch and deduplicate in Python by normalized district_code
+        districts_raw = await db.districts.find(
             {"state_code": state_code},
             {"_id": 0}
-        ).sort("district_name", 1).to_list(100)
-        
+        ).sort("district_name", 1).to_list(1000)
+
+        def _normalize(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            code = str(d.get("district_code", "")).strip().upper()
+            if not code:
+                return None
+            d["district_code"] = code
+            # Also trim names if present
+            if d.get("district_name"):
+                d["district_name"] = str(d["district_name"]).strip()
+            if d.get("district_name_hi"):
+                d["district_name_hi"] = str(d["district_name_hi"]).strip()
+            return d
+
+        dedup: Dict[str, Dict[str, Any]] = {}
+        for d in districts_raw:
+            nd = _normalize(d)
+            if not nd:
+                continue
+            code = nd["district_code"]
+            if code not in dedup:
+                dedup[code] = nd
+        districts = list(dedup.values())
+
         if not districts:
-            # If no districts in DB, return a default list
-            districts = await seed_default_districts(state_code)
+            # As a fallback, load from data file without writing to DB
+            data_file = ROOT_DIR / 'data' / 'up_districts.json'
+            try:
+                with open(data_file, 'r', encoding='utf-8') as f:
+                    file_items = json.load(f)
+                tmp: Dict[str, Dict[str, Any]] = {}
+                for d in file_items:
+                    code = str(d.get("district_code", "")).strip().upper()
+                    if not code:
+                        continue
+                    if code not in tmp:
+                        tmp[code] = {
+                            "id": str(uuid.uuid4()),
+                            "district_code": code,
+                            "district_name": (d.get("district_name") or "").strip(),
+                            "district_name_hi": (d.get("district_name_hi") or d.get("district_name") or "").strip(),
+                            "state_code": state_code,
+                            "state_name": "Uttar Pradesh" if state_code == "UP" else "",
+                            "state_name_hi": "उत्तर प्रदेश" if state_code == "UP" else "",
+                        }
+                districts = list(tmp.values())
+            except Exception as _:
+                districts = []
         
         await cache_set(cache_key, districts, 86400)  # Cache for 24 hours
         return DistrictResponse(success=True, data=districts)
@@ -281,88 +325,126 @@ async def compare_performance(district_code: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def seed_default_districts(state_code: str = "UP") -> List[Dict[str, Any]]:
-    """Seed default UP districts if not present"""
-    up_districts = [
-        {"district_code": "UP01", "district_name": "Agra", "district_name_hi": "आगरा", "latitude": 27.1767, "longitude": 78.0081},
-        {"district_code": "UP02", "district_name": "Aligarh", "district_name_hi": "अलीगढ़", "latitude": 27.8974, "longitude": 78.0880},
-        {"district_code": "UP03", "district_name": "Allahabad", "district_name_hi": "इलाहाबाद", "latitude": 25.4358, "longitude": 81.8463},
-        {"district_code": "UP04", "district_name": "Ambedkar Nagar", "district_name_hi": "अंबेडकर नगर", "latitude": 26.4050, "longitude": 82.6986},
-        {"district_code": "UP05", "district_name": "Amethi", "district_name_hi": "अमेठी", "latitude": 26.1544, "longitude": 81.8084},
-        {"district_code": "UP06", "district_name": "Amroha", "district_name_hi": "अमरोहा", "latitude": 28.9031, "longitude": 78.4675},
-        {"district_code": "UP07", "district_name": "Auraiya", "district_name_hi": "औरैया", "latitude": 26.4667, "longitude": 79.5167},
-        {"district_code": "UP08", "district_name": "Azamgarh", "district_name_hi": "आजमगढ़", "latitude": 26.0686, "longitude": 83.1840},
-        {"district_code": "UP09", "district_name": "Baghpat", "district_name_hi": "बागपत", "latitude": 28.9472, "longitude": 77.2195},
-        {"district_code": "UP10", "district_name": "Bahraich", "district_name_hi": "बहराइच", "latitude": 27.5742, "longitude": 81.5947},
-        {"district_code": "UP11", "district_name": "Ballia", "district_name_hi": "बलिया", "latitude": 25.7648, "longitude": 84.1496},
-        {"district_code": "UP12", "district_name": "Balrampur", "district_name_hi": "बलरामपुर", "latitude": 27.4308, "longitude": 82.1807},
-        {"district_code": "UP13", "district_name": "Banda", "district_name_hi": "बांदा", "latitude": 25.4762, "longitude": 80.3361},
-        {"district_code": "UP14", "district_name": "Barabanki", "district_name_hi": "बाराबंकी", "latitude": 26.9245, "longitude": 81.1840},
-        {"district_code": "UP15", "district_name": "Bareilly", "district_name_hi": "बरेली", "latitude": 28.3670, "longitude": 79.4304},
-        {"district_code": "UP16", "district_name": "Basti", "district_name_hi": "बस्ती", "latitude": 26.7850, "longitude": 82.7392},
-        {"district_code": "UP17", "district_name": "Bijnor", "district_name_hi": "बिजनौर", "latitude": 29.3731, "longitude": 78.1331},
-        {"district_code": "UP18", "district_name": "Budaun", "district_name_hi": "बदायूं", "latitude": 28.0330, "longitude": 79.1333},
-        {"district_code": "UP19", "district_name": "Bulandshahr", "district_name_hi": "बुलंदशहर", "latitude": 28.4067, "longitude": 77.8498},
-        {"district_code": "UP20", "district_name": "Chandauli", "district_name_hi": "चंदौली", "latitude": 25.2667, "longitude": 83.2667},
-        {"district_code": "UP21", "district_name": "Chitrakoot", "district_name_hi": "चित्रकूट", "latitude": 25.2000, "longitude": 80.9000},
-        {"district_code": "UP22", "district_name": "Deoria", "district_name_hi": "देवरिया", "latitude": 26.5024, "longitude": 83.7791},
-        {"district_code": "UP23", "district_name": "Etah", "district_name_hi": "एटा", "latitude": 27.5639, "longitude": 78.6628},
-        {"district_code": "UP24", "district_name": "Etawah", "district_name_hi": "इटावा", "latitude": 26.7855, "longitude": 79.0215},
-        {"district_code": "UP25", "district_name": "Faizabad", "district_name_hi": "फैजाबाद", "latitude": 26.7750, "longitude": 82.1496},
-        {"district_code": "UP26", "district_name": "Farrukhabad", "district_name_hi": "फर्रुखाबाद", "latitude": 27.3882, "longitude": 79.5804},
-        {"district_code": "UP27", "district_name": "Fatehpur", "district_name_hi": "फतेहपुर", "latitude": 25.9308, "longitude": 80.8122},
-        {"district_code": "UP28", "district_name": "Firozabad", "district_name_hi": "फिरोजाबाद", "latitude": 27.1484, "longitude": 78.3957},
-        {"district_code": "UP29", "district_name": "Gautam Buddha Nagar", "district_name_hi": "गौतम बुद्ध नगर", "latitude": 28.3587, "longitude": 77.5186},
-        {"district_code": "UP30", "district_name": "Ghaziabad", "district_name_hi": "गाजियाबाद", "latitude": 28.6692, "longitude": 77.4538},
-        {"district_code": "UP31", "district_name": "Ghazipur", "district_name_hi": "गाजीपुर", "latitude": 25.5881, "longitude": 83.5778},
-        {"district_code": "UP32", "district_name": "Gonda", "district_name_hi": "गोंडा", "latitude": 27.1333, "longitude": 81.9667},
-        {"district_code": "UP33", "district_name": "Gorakhpur", "district_name_hi": "गोरखपुर", "latitude": 26.7606, "longitude": 83.3732},
-        {"district_code": "UP34", "district_name": "Hamirpur", "district_name_hi": "हमीरपुर", "latitude": 25.9565, "longitude": 80.1482},
-        {"district_code": "UP35", "district_name": "Hapur", "district_name_hi": "हापुड़", "latitude": 28.7293, "longitude": 77.7758},
-        {"district_code": "UP36", "district_name": "Hardoi", "district_name_hi": "हरदोई", "latitude": 27.3965, "longitude": 80.1251},
-        {"district_code": "UP37", "district_name": "Hathras", "district_name_hi": "हाथरस", "latitude": 27.5952, "longitude": 78.0499},
-        {"district_code": "UP38", "district_name": "Jalaun", "district_name_hi": "जालौन", "latitude": 26.1447, "longitude": 79.3376},
-        {"district_code": "UP39", "district_name": "Jaunpur", "district_name_hi": "जौनपुर", "latitude": 25.7462, "longitude": 82.6841},
-        {"district_code": "UP40", "district_name": "Jhansi", "district_name_hi": "झांसी", "latitude": 25.4486, "longitude": 78.5696},
-        {"district_code": "UP41", "district_name": "Kannauj", "district_name_hi": "कन्नौज", "latitude": 27.0514, "longitude": 79.9142},
-        {"district_code": "UP42", "district_name": "Kanpur Dehat", "district_name_hi": "कानपुर देहात", "latitude": 26.4675, "longitude": 79.8655},
-        {"district_code": "UP43", "district_name": "Kanpur Nagar", "district_name_hi": "कानपुर नगर", "latitude": 26.4499, "longitude": 80.3319},
-        {"district_code": "UP44", "district_name": "Kasganj", "district_name_hi": "कासगंज", "latitude": 27.8088, "longitude": 78.6443},
-        {"district_code": "UP45", "district_name": "Kaushambi", "district_name_hi": "कौशाम्बी", "latitude": 25.5316, "longitude": 81.3784},
-        {"district_code": "UP46", "district_name": "Kushinagar", "district_name_hi": "कुशीनगर", "latitude": 26.7420, "longitude": 83.8891},
-        {"district_code": "UP47", "district_name": "Lakhimpur Kheri", "district_name_hi": "लखीमपुर खीरी", "latitude": 27.9474, "longitude": 80.7780},
-        {"district_code": "UP48", "district_name": "Lalitpur", "district_name_hi": "ललितपुर", "latitude": 24.6880, "longitude": 78.4122},
-        {"district_code": "UP49", "district_name": "Lucknow", "district_name_hi": "लखनऊ", "latitude": 26.8467, "longitude": 80.9462},
-        {"district_code": "UP50", "district_name": "Maharajganj", "district_name_hi": "महाराजगंज", "latitude": 27.1441, "longitude": 83.5599}
-    ]
-    
-    # Add more fields
-    for district in up_districts:
-        district.update({
+    """Seed UP districts from data file; upsert missing entries so we reach full coverage."""
+    data_file = ROOT_DIR / 'data' / 'up_districts.json'
+    up_districts: List[Dict[str, Any]] = []
+    try:
+        if data_file.exists():
+            import json as _json
+            with open(data_file, 'r', encoding='utf-8') as f:
+                up_districts = _json.load(f)
+        else:
+            logging.warning(f"District data file not found: {data_file}. Seeding minimal defaults.")
+            up_districts = []
+    except Exception as e:
+        logging.warning(f"Failed to load districts file: {e}. Using minimal list.")
+        up_districts = []
+
+    # Decorate and upsert
+    results: List[Dict[str, Any]] = []
+    for d in up_districts:
+        # Normalize and sanitize values
+        raw_code = d.get("district_code", "")
+        norm_code = str(raw_code).strip().upper()
+        name_en = (d.get("district_name") or "").strip()
+        name_hi = (d.get("district_name_hi") or name_en).strip()
+
+        if not norm_code:
+            continue  # skip invalid entries
+
+        doc = {
             "id": str(uuid.uuid4()),
+            "district_code": norm_code,
+            "district_name": name_en,
+            "district_name_hi": name_hi,
             "state_code": "UP",
             "state_name": "Uttar Pradesh",
-            "state_name_hi": "उत्तर प्रदेश"
-        })
-    
-    # Insert into DB
-    try:
-        await db.districts.insert_many(up_districts)
-    except Exception as e:
-        logging.warning(f"Error seeding districts: {e}")
-    
-    return up_districts
+            "state_name_hi": "उत्तर प्रदेश",
+        }
+        # Upsert by district_code; then update key fields to normalized values
+        try:
+            await db.districts.update_one(
+                {"district_code": doc["district_code"]},
+                {"$setOnInsert": doc},
+                upsert=True
+            )
+            await db.districts.update_one(
+                {"district_code": doc["district_code"]},
+                {"$set": {
+                    "district_name": doc["district_name"],
+                    "district_name_hi": doc["district_name_hi"],
+                    "state_code": doc["state_code"],
+                    "state_name": doc["state_name"],
+                    "state_name_hi": doc["state_name_hi"]
+                }},
+                upsert=False
+            )
+            results.append(doc)
+        except Exception as e:
+            logging.warning(f"Upsert failed for {doc['district_code']}: {e}")
 
-# Include router
-app.include_router(api_router)
+    # If DB ended up empty (e.g., file missing), ensure at least what's in states_data
+    if not results:
+        from states_data import STATE_DISTRICTS
+        for d in STATE_DISTRICTS.get('UP', []):
+            raw_code = d.get("district_code", "")
+            norm_code = str(raw_code).strip().upper()
+            name_en = (d.get("district_name") or "").strip()
+            name_hi = (d.get("district_name_hi") or name_en).strip()
+
+            if not norm_code:
+                continue
+
+            doc = {
+                "id": str(uuid.uuid4()),
+                "district_code": norm_code,
+                "district_name": name_en,
+                "district_name_hi": name_hi,
+                "state_code": "UP",
+                "state_name": "Uttar Pradesh",
+                "state_name_hi": "उत्तर प्रदेश",
+            }
+            await db.districts.update_one(
+                {"district_code": doc["district_code"]},
+                {"$setOnInsert": doc},
+                upsert=True
+            )
+            await db.districts.update_one(
+                {"district_code": doc["district_code"]},
+                {"$set": {
+                    "district_name": doc["district_name"],
+                    "district_name_hi": doc["district_name_hi"],
+                    "state_code": doc["state_code"],
+                    "state_name": doc["state_name"],
+                    "state_name_hi": doc["state_name_hi"]
+                }},
+                upsert=False
+            )
+            results.append(doc)
+
+    return results
+
+# Configure CORS origins robustly (strip quotes and whitespace)
+raw_origins = os.environ.get('CORS_ORIGINS', '*')
+if raw_origins == '*':
+    allow_origins = ['*']
+else:
+    allow_origins = [o.strip().strip('"').strip("'") for o in raw_origins.split(',') if o.strip()]
+
+# Log resolved origins
+logging.getLogger(__name__).info(f"Configured CORS origins: {allow_origins}")
 
 # Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include router
+app.include_router(api_router)
 
 # Configure logging
 logging.basicConfig(
