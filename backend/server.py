@@ -17,10 +17,21 @@ from states_data import get_all_states, get_districts_for_state, INDIAN_STATES
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+# MongoDB connection (robust env handling)
+# Support common var names and provide a clear error if missing
+mongo_url = (
+    os.environ.get('MONGO_URL')
+    or os.environ.get('MONGODB_URI')
+    or os.environ.get('MONGO_URI')
+)
+if not mongo_url:
+    raise RuntimeError(
+        "Missing MongoDB connection string. Set MONGO_URL (or MONGODB_URI/MONGO_URI) in your environment."
+    )
+
+db_name = os.environ.get('DB_NAME', 'mgnrega')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
 # Redis connection
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379')
