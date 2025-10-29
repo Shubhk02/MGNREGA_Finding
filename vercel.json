@@ -5,26 +5,10 @@
       "src": "frontend/package.json",
       "use": "@vercel/static-build",
       "config": {
-        "distDir": "build"
+        "distDir": "build",
+        "installCommand": "yarn install",
+        "buildCommand": "yarn build"
       }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/static/(.*)",
-      "dest": "frontend/build/static/$1"
-    },
-    {
-      "src": "/favicon.ico",
-      "dest": "frontend/build/favicon.ico"
-    },
-    {
-      "src": "/manifest.json",
-      "dest": "frontend/build/manifest.json"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "frontend/build/index.html"
     }
   ]
 }
