@@ -37,8 +37,10 @@ db = client[db_name]
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379')
 redis_client = None
 
-# data.gov.in API key
+# data.gov.in configuration
 DATA_GOV_API_KEY = os.environ.get('DATA_GOV_API_KEY', '579b464db66ec23bdd000001c5f7ea9da0054f1442874f7b61f02d14')
+DATA_GOV_RESOURCE_ID = os.environ.get('DATA_GOV_RESOURCE_ID', 'ee03643a-ee4c-48c2-ac30-9f2ff26ab722')
+USE_DATA_GOV = os.environ.get('USE_DATA_GOV', '0').strip() in {'1', 'true', 'yes', 'on'}
 
 # Create the main app
 app = FastAPI(title="MGNREGA Dashboard API")
@@ -117,10 +119,61 @@ async def cache_set(key: str, value: Any, ttl: int = 3600):
         logging.error(f"Cache set error: {e}")
 
 async def fetch_from_data_gov(district_code: str, month: int, year: int) -> Dict[str, Any]:
-    """Fetch performance data from data.gov.in API"""
-    # For MVP, using mock data as the actual data.gov.in MGNREGA API endpoint structure may vary
-    # In production, replace with actual data.gov.in MGNREGA API endpoint once confirmed
-    return generate_mock_performance_data(district_code, month, year)
+    """Fetch performance data from data.gov.in API if enabled; else return mock.
+
+    This implementation makes a best-effort query against the provided resource.
+    It attempts to map common field names; if data is unavailable or parsing fails,
+    it falls back to mock data to keep the app responsive.
+    """
+    if not USE_DATA_GOV:
+        return generate_mock_performance_data(district_code, month, year)
+
+    base_url = f"https://api.data.gov.in/resource/{DATA_GOV_RESOURCE_ID}"
+    params = {
+        'api-key': DATA_GOV_API_KEY,
+        'format': 'json',
+        'limit': '1',
+        # Best-effort filters; dataset schemas vary. Adjust as needed.
+        'filters[district_code]': district_code,
+        'filters[month]': str(month),
+        'filters[year]': str(year),
+    }
+
+    def pick_num(rec: Dict[str, Any], keys: list[str], default: float = 0) -> float:
+        for k in keys:
+            if k in rec and rec[k] not in (None, ""):
+                try:
+                    return float(rec[k])
+                except Exception:
+                    pass
+        return float(default)
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client_http:
+            resp = await client_http.get(base_url, params=params)
+            resp.raise_for_status()
+            payload = resp.json()
+            records = payload.get('records') or payload.get('data') or []
+            if not records:
+                return generate_mock_performance_data(district_code, month, year)
+            rec = records[0]
+
+            # Map likely fields to our schema; fallback to zeros when missing
+            return {
+                'district_code': district_code,
+                'month': month,
+                'year': year,
+                'total_workers': int(pick_num(rec, ['total_workers', 'workers_total', 'tot_workers', 'households_worked'] , 0)),
+                'work_completed': int(pick_num(rec, ['work_completed', 'works_completed', 'completed_works'], 0)),
+                'work_ongoing': int(pick_num(rec, ['work_ongoing', 'works_ongoing', 'ongoing_works'], 0)),
+                'average_wage': round(pick_num(rec, ['average_wage', 'avg_wage', 'wage_avg'], 0.0), 2),
+                'budget_allocated': round(pick_num(rec, ['budget_allocated', 'funds_allocated', 'allocated_funds'], 0.0), 2),
+                'budget_spent': round(pick_num(rec, ['budget_spent', 'expenditure', 'funds_spent'], 0.0), 2),
+                'person_days_generated': int(pick_num(rec, ['person_days_generated', 'persondays', 'person_days', 'person_days_total'], 0)),
+            }
+    except Exception as e:
+        logging.warning(f"data.gov.in fetch failed, falling back to mock: {e}")
+        return generate_mock_performance_data(district_code, month, year)
 
 def generate_mock_performance_data(district_code: str, month: int, year: int) -> Dict[str, Any]:
     """Generate realistic mock data for demonstration"""
