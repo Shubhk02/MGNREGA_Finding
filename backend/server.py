@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import redis.asyncio as redis
 import json
+from urllib.parse import quote_plus
 from states_data import get_all_states, get_districts_for_state, INDIAN_STATES
 
 ROOT_DIR = Path(__file__).parent
@@ -28,6 +29,23 @@ if not mongo_url:
     raise RuntimeError(
         "Missing MongoDB connection string. Set MONGO_URL (or MONGODB_URI/MONGO_URI) in your environment."
     )
+
+# Auto-encode username and password if they contain special characters
+# This handles cases where Railway env vars have unencoded credentials
+if '://' in mongo_url and '@' in mongo_url:
+    try:
+        # Extract protocol, credentials, and host
+        protocol, rest = mongo_url.split('://', 1)
+        if '@' in rest:
+            credentials, host_part = rest.rsplit('@', 1)
+            if ':' in credentials:
+                username, password = credentials.split(':', 1)
+                # Re-encode to ensure RFC 3986 compliance
+                encoded_username = quote_plus(username)
+                encoded_password = quote_plus(password)
+                mongo_url = f"{protocol}://{encoded_username}:{encoded_password}@{host_part}"
+    except Exception as e:
+        logging.warning(f"Could not auto-encode MongoDB credentials: {e}. Using URL as-is.")
 
 db_name = os.environ.get('DB_NAME', 'mgnrega')
 client = AsyncIOMotorClient(mongo_url)
