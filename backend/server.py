@@ -13,6 +13,7 @@ import httpx
 import redis.asyncio as redis
 import json
 from urllib.parse import quote_plus
+from contextlib import asynccontextmanager
 from states_data import get_all_states, get_districts_for_state, INDIAN_STATES
 
 ROOT_DIR = Path(__file__).parent
@@ -60,8 +61,21 @@ DATA_GOV_API_KEY = os.environ.get('DATA_GOV_API_KEY', '579b464db66ec23bdd000001c
 DATA_GOV_RESOURCE_ID = os.environ.get('DATA_GOV_RESOURCE_ID', 'ee03643a-ee4c-48c2-ac30-9f2ff26ab722')
 USE_DATA_GOV = os.environ.get('USE_DATA_GOV', '0').strip() in {'1', 'true', 'yes', 'on'}
 
-# Create the main app
-app = FastAPI(title="MGNREGA Dashboard API")
+# Lifespan context manager for startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger = logging.getLogger(__name__)
+    logger.info("Starting MGNREGA Dashboard API")
+    await get_redis()
+    yield
+    # Shutdown
+    client.close()
+    if redis_client:
+        await redis_client.close()
+
+# Create the main app with lifespan
+app = FastAPI(title="MGNREGA Dashboard API", lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 # Models
@@ -534,14 +548,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting MGNREGA Dashboard API")
-    await get_redis()
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
-    if redis_client:
-        await redis_client.close()
